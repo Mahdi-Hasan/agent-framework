@@ -2017,13 +2017,15 @@ class ChatTelemetryLayer(Generic[OptionsCoT]):
         model = merged_client_kwargs.get("model") or opts.get("model") or getattr(self, "model", None) or "unknown"
         service_url_func = getattr(self, "service_url", None)
         service_url = str(service_url_func() if callable(service_url_func) else "unknown")
-        attributes = _get_span_attributes(
-            operation_name=OtelAttr.CHAT_COMPLETION_OPERATION,
-            provider_name=provider_name,
-            model=model,
-            service_url=service_url,
+        # The resolved values win over client_kwargs; spreading both as keywords raises
+        # TypeError when client_kwargs carries one of the same keys (e.g. "model").
+        attributes = _get_span_attributes(**{
             **merged_client_kwargs,
-        )
+            "operation_name": OtelAttr.CHAT_COMPLETION_OPERATION,
+            "provider_name": provider_name,
+            "model": model,
+            "service_url": service_url,
+        })
         if (telemetry_conversation_id := _TELEMETRY_CONVERSATION_ID.get()) is not None:
             # Keep application-managed telemetry correlation separate from the
             # provider-owned conversation_id forwarded through chat options.

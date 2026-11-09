@@ -316,6 +316,29 @@ async def test_chat_client_observability_accepts_model_option(
     assert span.attributes[OtelAttr.REQUEST_MODEL] == "Test"  # type: ignore[index]  # pyrefly: ignore[unsupported-operation]  # ty: ignore[not-subscriptable]
 
 
+@pytest.mark.parametrize("stream", [False, True])
+async def test_chat_client_observability_accepts_model_client_kwarg(
+    mock_chat_client, span_exporter: InMemorySpanExporter, stream: bool
+):
+    """A model passed through client_kwargs names the span instead of colliding with the explicit model."""
+    client = mock_chat_client()
+
+    messages = [Message(role="user", contents=["Test message"])]
+    span_exporter.clear()
+    if stream:
+        response_stream = client.get_response(messages=messages, stream=True, client_kwargs={"model": "Test"})
+        async for _ in response_stream:
+            pass
+        response = await response_stream.get_final_response()
+    else:
+        response = await client.get_response(messages=messages, client_kwargs={"model": "Test"})
+    assert response is not None
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].name == "chat Test"
+    assert spans[0].attributes[OtelAttr.REQUEST_MODEL] == "Test"  # type: ignore[index]  # pyrefly: ignore[unsupported-operation]  # ty: ignore[not-subscriptable]
+
+
 @pytest.mark.parametrize("enable_sensitive_data", [True, False], indirect=True)
 async def test_chat_client_streaming_observability(
     mock_chat_client, span_exporter: InMemorySpanExporter, enable_sensitive_data
