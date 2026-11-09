@@ -3360,6 +3360,7 @@ class MCPTool:
         existing_remote_by_local: dict[str, str] = {}
         new_functions: list[FunctionTool] = []
         reused_tool_names: set[str] = set()
+        retained_tool_names: set[str] = set()
         for func in self._functions:
             if (func.additional_properties or {}).get(_MCP_IS_TOOL_KEY):
                 existing_tools[func.name] = func
@@ -3446,18 +3447,18 @@ class MCPTool:
                     is_retained=existing_tool is not None,
                 )
 
-                if existing_tool is not None:
-                    reused_tool_names.add(local_name)
-                    if approval_mode is not None:
-                        tool_approval_updates[local_name] = approval_mode
-                    continue
-
+                # A retained tool under a static policy keeps its current approval mode.
+                func_approval_mode = (
+                    existing_tool.approval_mode
+                    if approval_mode is None and existing_tool is not None
+                    else approval_mode
+                )
                 # Create FunctionTools out of each tool
                 func: FunctionTool = FunctionTool(
                     func=_make_mcp_tool_caller(self, tool.name),
                     name=local_name,
                     description=tool.description or "",
-                    approval_mode=approval_mode,
+                    approval_mode=func_approval_mode,
                     input_model=input_schema,
                     additional_properties={
                         _MCP_REMOTE_NAME_KEY: tool.name,
@@ -3465,6 +3466,20 @@ class MCPTool:
                         _MCP_IS_TOOL_KEY: True,
                     },
                 )
+
+                if existing_tool is not None:
+                    # Same remote tool identity: keep its progressive-load state even if its metadata changed.
+                    retained_tool_names.add(local_name)
+                    if (
+                        existing_tool.description == func.description
+                        and existing_tool.parameters() == func.parameters()
+                    ):
+                        # Keep the unchanged tool function so local customizations survive a refresh.
+                        reused_tool_names.add(local_name)
+                        if approval_mode is not None:
+                            tool_approval_updates[local_name] = approval_mode
+                        continue
+
                 new_functions.append(func)
 
         tool_list = await self._try_list_page_with_recovery(
@@ -3522,7 +3537,7 @@ class MCPTool:
         self._tool_call_meta_by_name = tool_call_meta_by_name
         self._tool_param_names_by_name = tool_param_names_by_name
         self._tool_annotations_by_name = tool_annotations_by_name
-        self._progressive_loaded_tool_names.difference_update(existing_tools.keys() - reused_tool_names)
+        self._progressive_loaded_tool_names.difference_update(existing_tools.keys() - retained_tool_names)
 
     async def _cancel_pending_reload_tasks(self) -> None:
         """Cancel session-bound discovery reloads and wait for them to finish."""

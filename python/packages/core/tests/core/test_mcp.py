@@ -1097,6 +1097,59 @@ async def test_load_prompts_refresh_keeps_progressive_state_when_metadata_change
     assert tool._progressive_loaded_tool_names == {"summary"}
 
 
+async def test_load_tools_refresh_rebuilds_tool_when_metadata_changes() -> None:
+    """A tool whose description or input schema changed is rebuilt and keeps its load state."""
+    tool = MCPTool(name="docs")  # type: ignore[abstract]  # ty: ignore[call-non-callable]
+    mock_session = AsyncMock()
+    tool.session = mock_session
+    mock_session.list_tools = AsyncMock(
+        return_value=types.ListToolsResult(
+            tools=[
+                types.Tool(
+                    name="search",
+                    description="Old",
+                    input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+                ),
+                types.Tool(name="same", description="Same", input_schema={"type": "object", "properties": {}}),
+            ]
+        )
+    )
+    await tool.load_tools()
+    old_search = next(function for function in tool._functions if function.name == "search")
+    old_same = next(function for function in tool._functions if function.name == "same")
+    old_search.approval_mode = "always_require"
+    tool._progressive_loaded_tool_names.update({"search", "same"})
+
+    mock_session.list_tools = AsyncMock(
+        return_value=types.ListToolsResult(
+            tools=[
+                types.Tool(
+                    name="search",
+                    description="New",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+                        "required": ["limit"],
+                    },
+                ),
+                types.Tool(name="same", description="Same", input_schema={"type": "object", "properties": {}}),
+            ]
+        )
+    )
+    await tool.load_tools()
+
+    functions_by_name = {function.name: function for function in tool._functions}
+    assert set(functions_by_name) == {"search", "same"}
+    assert functions_by_name["same"] is old_same
+    new_search = functions_by_name["search"]
+    assert new_search is not old_search
+    assert new_search.description == "New"
+    assert new_search.parameters()["required"] == ["limit"]
+    assert "limit" in new_search.parameters()["properties"]
+    assert new_search.approval_mode == "always_require"
+    assert tool._progressive_loaded_tool_names == {"search", "same"}
+
+
 async def test_load_prompts_empty_snapshot_clears_prompts() -> None:
     """A successful empty prompts/list snapshot clears previously loaded prompts."""
     tool = MCPTool(name="docs")  # type: ignore[abstract]  # ty: ignore[call-non-callable]
