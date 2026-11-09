@@ -1214,6 +1214,35 @@ class TestAGUIChatClient:
         assert len(response.messages) > 0
         assert "Complete response" in response.text
 
+    async def test_get_response_converts_chunk_events(self, monkeypatch: MonkeyPatch) -> None:
+        """TEXT_MESSAGE_CHUNK and TOOL_CALL_CHUNK events are converted like their start/content forms."""
+        mock_events = [
+            {"type": "RUN_STARTED", "threadId": "thread_1", "runId": "run_1"},
+            {"type": "TEXT_MESSAGE_CHUNK", "messageId": "msg_1", "role": "assistant", "delta": "Hello"},
+            {"type": "TEXT_MESSAGE_CHUNK", "delta": " world"},
+            {"type": "TOOL_CALL_CHUNK", "toolCallId": "call_1", "toolCallName": "get_weather", "delta": '{"city":'},
+            {"type": "TOOL_CALL_CHUNK", "delta": '"Paris"}'},
+            {"type": "RUN_FINISHED", "threadId": "thread_1", "runId": "run_1"},
+        ]
+
+        async def mock_post_run(*args: object, **kwargs: Any) -> AsyncGenerator[dict[str, Any], None]:
+            for event in mock_events:
+                yield event
+
+        client = StubAGUIChatClient(endpoint="http://localhost:8888/")
+        monkeypatch.setattr(client.http_service, "post_run", mock_post_run)
+
+        response = await client.get_response([Message(role="user", contents=["Weather?"])])
+
+        assert response.text == "Hello world"
+        calls = [
+            content for message in response.messages for content in message.contents if content.type == "function_call"
+        ]
+        assert len(calls) == 1
+        assert calls[0].call_id == "call_1"
+        assert calls[0].name == "get_weather"
+        assert calls[0].arguments == '{"city":"Paris"}'
+
     @pytest.mark.parametrize(
         "stream,invocation_enabled,consume_stream,strip_run_metadata",
         [

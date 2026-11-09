@@ -199,10 +199,14 @@ class AGUIEventConverter:
             return self._handle_text_message_content(event)
         elif event_type == "TEXT_MESSAGE_END":
             return self._handle_text_message_end(event)
+        elif event_type == "TEXT_MESSAGE_CHUNK":
+            return self._handle_text_message_chunk(event)
         elif event_type == "TOOL_CALL_START":
             return self._handle_tool_call_start(event)
         elif event_type == "TOOL_CALL_ARGS":
             return self._handle_tool_call_args(event)
+        elif event_type == "TOOL_CALL_CHUNK":
+            return self._handle_tool_call_chunk(event)
         elif event_type == "TOOL_CALL_END":
             return self._handle_tool_call_end(event)
         elif event_type == "TOOL_CALL_RESULT":
@@ -257,6 +261,12 @@ class AGUIEventConverter:
         """Handle TEXT_MESSAGE_END event."""
         return None
 
+    def _handle_text_message_chunk(self, event: dict[str, Any]) -> ChatResponseUpdate:
+        """Handle TEXT_MESSAGE_CHUNK event; a chunk without messageId continues the current message."""
+        if event.get("messageId") is None:
+            event = {**event, "messageId": self.current_message_id}
+        return self._handle_text_message_content(event)
+
     def _handle_tool_call_start(self, event: dict[str, Any]) -> ChatResponseUpdate:
         """Handle TOOL_CALL_START event."""
         self.current_tool_call_id = self._get_tool_call_id(event)
@@ -303,6 +313,13 @@ class AGUIEventConverter:
                 )
             ],
         )
+
+    def _handle_tool_call_chunk(self, event: dict[str, Any]) -> ChatResponseUpdate | None:
+        """Handle TOOL_CALL_CHUNK event; a chunk with a new toolCallId starts a new tool call."""
+        event_tool_call_id = self._get_tool_call_id(event)
+        if event_tool_call_id is not None and event_tool_call_id != self.current_tool_call_id:
+            self._handle_tool_call_start(event)
+        return self._handle_tool_call_args(event)
 
     def _handle_tool_call_end(self, event: dict[str, Any]) -> ChatResponseUpdate | None:
         """Handle TOOL_CALL_END event."""
