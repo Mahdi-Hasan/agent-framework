@@ -508,6 +508,59 @@ def test_prepare_options_tool_choice_none_omits_tool_config() -> None:
     )
 
 
+class _ToolThenTextBedrockRuntime(_StubBedrockRuntime):
+    """Answers the first Converse call with a toolUse block and later calls with text."""
+
+    def converse(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            content: list[dict[str, Any]] = [
+                {"toolUse": {"toolUseId": "tooluse-1", "name": "get_weather", "input": {"city": "Paris"}}}
+            ]
+            stop_reason = "tool_use"
+        else:
+            content = [{"text": "It is sunny in Paris."}]
+            stop_reason = "end_turn"
+        return {
+            "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+            "stopReason": stop_reason,
+            "output": {"message": {"role": "assistant", "content": content}},
+        }
+
+
+async def test_final_response_after_max_iterations_keeps_tool_config_for_tool_history() -> None:
+    """The final tool_choice='none' request still declares the tools used earlier in the conversation.
+
+    Converse rejects toolUse and toolResult blocks when toolConfig is missing.
+    """
+
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        return f"Sunny in {city}"
+
+    runtime = _ToolThenTextBedrockRuntime()
+    client = BedrockChatClient(
+        model="amazon.titan-text",
+        region="us-west-2",
+        client=runtime,  # pyrefly: ignore[bad-argument-type] # ty: ignore[invalid-argument-type] # pyright: ignore[reportArgumentType]
+        function_invocation_configuration={"max_iterations": 1},
+    )
+
+    response = await client.get_response(
+        [Message(role="user", contents=[Content.from_text(text="Weather in Paris?")])],
+        options={"tools": [get_weather]},
+    )
+
+    assert response.text == "It is sunny in Paris."
+    final_request = runtime.calls[-1]
+    sent_blocks = [block for message in final_request["messages"] for block in message["content"]]
+    assert any("toolUse" in block for block in sent_blocks)
+    assert any("toolResult" in block for block in sent_blocks)
+    assert "toolConfig" in final_request
+    assert [tool["toolSpec"]["name"] for tool in final_request["toolConfig"]["tools"]] == ["get_weather"]
+    assert "toolChoice" not in final_request["toolConfig"]
+
+
 def test_prepare_options_tool_choice_auto_includes_tool_config() -> None:
     """When tool_choice='auto', toolConfig.toolChoice should be {'auto': {}}."""
     client = _make_client()

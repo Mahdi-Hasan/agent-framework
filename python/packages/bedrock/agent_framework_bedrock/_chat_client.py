@@ -475,8 +475,15 @@ class BedrockChatClient(
             match tool_mode.get("mode"):
                 case "none":
                     # Bedrock doesn't support toolChoice "none".
-                    # Omit toolConfig entirely so the model won't attempt tool calls.
-                    tool_config = None
+                    # Omit toolConfig entirely so the model won't attempt tool calls,
+                    # unless the conversation already holds toolUse/toolResult blocks:
+                    # Converse rejects those without toolConfig, so keep the tools there.
+                    if not any(
+                        "toolUse" in block or "toolResult" in block
+                        for message in conversation
+                        for block in message["content"]
+                    ):
+                        tool_config = None
                 case "auto":
                     if tool_config and "tools" in tool_config:
                         tool_config["toolChoice"] = {"auto": {}}
